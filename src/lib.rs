@@ -32,6 +32,7 @@ pub extern crate cortex_m;
 pub extern crate embedded_hal as hal;
 pub extern crate nb;
 pub extern crate stm32g4;
+pub extern crate fdcan;
 
 pub use nb::block;
 
