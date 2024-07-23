@@ -287,6 +287,11 @@ macro_rules! hal {
                     self.tim.cr1.modify(|_, w| w.cen().clear_bit());
                     self.tim
                 }
+
+                /// Get the time left until the counter hits 0
+                pub fn elapsed_time(&self) -> MicroSecond {
+                    crate::time::duration(self.clk, self.tim.cnt.read().cnt().bits() as u32)
+                }
             }
 
             impl embedded_hal::timer::CountDown for CountDownTimer<$TIM> {
