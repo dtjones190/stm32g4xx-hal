@@ -89,7 +89,7 @@ mod app {
             0xDE, 0xF0 as u8,
         ];
         let mut flash = dp.FLASH.constrain();
-        let mut flash_writer = flash.writer::<2048>(FlashSize::Sz256K);
+        let mut flash_writer = flash.writer(FlashSize::Sz256K);
 
         const FLASH_SPACING: u32 = 16; // Separate flash writes by 16 bytes
         const FLASH_EXAMPLE_START_ADDRESS: u32 = 0x1FC00;
