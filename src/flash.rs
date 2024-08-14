@@ -58,8 +58,6 @@ pub struct FlashWriter<'a> {
     flash: &'a mut Parts,
     flash_sz: FlashSize,
     verify: bool,
-    page_size: u32,
-    dual_bank: bool,
 }
 impl<'a> FlashWriter<'a> {
     #[allow(unused)]
@@ -158,6 +156,58 @@ impl<'a> FlashWriter<'a> {
         Ok(())
     }
 
+    //Category 3 devices, these support dual bank flash
+    /// Is the flash configured in dual bank mode
+    #[cfg(any(
+        feature = "stm32g471",
+        feature = "stm32g473",
+        feature = "stm32g474",
+        feature = "stm32g483",
+        feature = "stm32g484",
+    ))]
+    pub fn dual_bank(&mut self) -> bool {
+        (self.flash._optr.optr().read().bits() >> 22) & 1 == 1
+    }
+
+    //Category 3 devices, these support dual bank flash
+    /// Is the flash configured in dual bank mode
+    #[cfg(any(
+        feature = "stm32g471",
+        feature = "stm32g473",
+        feature = "stm32g474",
+        feature = "stm32g483",
+        feature = "stm32g484",
+    ))]
+    pub fn page_size(&mut self) -> u32 {
+        if self.dual_bank() {
+            2 * SZ_1K
+        } else {
+            4 * SZ_1K
+        }
+    }
+
+    //Category 2 and 4 devices
+    #[cfg(any(
+        feature = "stm32g431",
+        feature = "stm32g441",
+        feature = "stm32g491",
+        feature = "stm32g4a1",
+    ))]
+    pub fn dual_bank(&self) -> bool {
+        false
+    }
+
+    //Category 2 and 4 devices
+    #[cfg(any(
+        feature = "stm32g431",
+        feature = "stm32g441",
+        feature = "stm32g491",
+        feature = "stm32g4a1",
+    ))]
+    pub fn page_size(&self) -> u32 {
+        2 * SZ_1K
+    }
+
     /// Erase sector which contains `start_offset`
     pub fn page_erase(&mut self, start_offset: u32) -> Result<()> {
         self.valid_address(start_offset)?;
@@ -165,9 +215,11 @@ impl<'a> FlashWriter<'a> {
         // Unlock Flash
         self.unlock()?;
 
-        let second_bank = self.dual_bank & (start_offset >= FLASH_BANK2_OFFSET);
+        let page_size = self.page_size();
+        let dual_bank = self.dual_bank();
+        let second_bank = dual_bank & (start_offset >= FLASH_BANK2_OFFSET);
 
-        if self.dual_bank {
+        if dual_bank {
             //Set bank
             self.flash.cr.cr().modify(|r, w| {
                 //This is just setting or clearing the BKER "Bank Erase" bit
@@ -180,13 +232,14 @@ impl<'a> FlashWriter<'a> {
                 }
             });
         }
+
         // Set Page Erase
         self.flash.cr.cr().modify(|_, w| w.per().set_bit());
 
         let page = if second_bank {
-            (start_offset - FLASH_BANK2_OFFSET) / self.page_size
+            (start_offset - FLASH_BANK2_OFFSET) / page_size
         } else {
-            start_offset / self.page_size
+            start_offset / page_size
         };
 
         // Write address bits
@@ -226,9 +279,8 @@ impl<'a> FlashWriter<'a> {
                 // page. We do this because the entire page should have been
                 // erased, regardless of where in the page the given
                 // 'start_offset' was.
-                let size = self.page_size;
-                let start = start_offset & !(size - 1);
-                for idx in (start..start + size).step_by(2) {
+                let start = start_offset & !(page_size - 1);
+                for idx in (start..start + page_size).step_by(2) {
                     let write_address = (FLASH_START + idx) as *const u16;
                     let verify: u16 = unsafe { core::ptr::read_volatile(write_address) };
                     if verify != 0xFFFF {
@@ -246,8 +298,8 @@ impl<'a> FlashWriter<'a> {
         self.valid_length(start_offset, length, true)?;
 
         // Erase every sector touched by start_offset + length
-        for offset in
-            (start_offset..start_offset + length as u32).step_by(self.page_size.try_into().unwrap())
+        for offset in (start_offset..start_offset + length as u32)
+            .step_by(self.page_size().try_into().unwrap())
         {
             self.page_erase(offset)?;
         }
@@ -449,47 +501,11 @@ pub struct Parts {
     pub(crate) _wrp1br: WRP1BR,
 }
 impl Parts {
-    //Category 2 devices
-    #[cfg(any(feature = "stm32g431", feature = "stm32g441",))]
     pub fn writer(&mut self, flash_sz: FlashSize) -> FlashWriter {
         FlashWriter {
             flash: self,
             flash_sz,
             verify: true,
-            page_size: 2 * SZ_1K,
-            dual_bank: false,
-        }
-    }
-
-    //Category 3 devices, these support dual bank flash
-    #[cfg(any(
-        feature = "stm32g471",
-        feature = "stm32g473",
-        feature = "stm32g474",
-        feature = "stm32g483",
-        feature = "stm32g484",
-    ))]
-    pub fn writer(&mut self, flash_sz: FlashSize) -> FlashWriter {
-        let dual_bank = (self._optr.optr().read().bits() >> 22) & 1 == 1;
-        let page_size = if dual_bank { 2 * SZ_1K } else { 4 * SZ_1K };
-        FlashWriter {
-            flash: self,
-            flash_sz,
-            verify: true,
-            page_size,
-            dual_bank,
-        }
-    }
-
-    //Category 4 devices
-    #[cfg(any(feature = "stm32g491", feature = "stm32g4a1",))]
-    pub fn writer(&mut self, flash_sz: FlashSize) -> FlashWriter {
-        FlashWriter {
-            flash: self,
-            flash_sz,
-            verify: true,
-            page_size: 4 * SZ_1K,
-            dual_bank: false,
         }
     }
 }
