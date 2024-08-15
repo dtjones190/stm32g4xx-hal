@@ -83,9 +83,18 @@ impl<'a> FlashWriter<'a> {
         }
 
         // Verify success
-        match self.flash.cr.cr().read().lock().bit_is_clear() {
+        match self.flash.cr.cr().read().optlock().bit_is_clear() {
             true => Ok(()),
             false => Err(Error::OptUnlockError),
+        }
+    }
+
+    fn lock_options(&mut self) -> Result<()> {
+        self.flash.cr.cr().modify(|_, w| w.optlock().set_bit());
+        self.lock()?;
+        match self.flash.cr.cr().read().optlock().bit_is_set() {
+            true => Ok(()),
+            false => Err(Error::OptLockError),
         }
     }
 
@@ -154,6 +163,58 @@ impl<'a> FlashWriter<'a> {
         }
 
         Ok(())
+    }
+
+    const BFB2_MASK: u32 = 1 << 20;
+
+    //Category 3 devices, these support dual bank flash
+    /// Is the flash set to try to boot from bank2 first
+    #[cfg(any(
+        feature = "stm32g471",
+        feature = "stm32g473",
+        feature = "stm32g474",
+        feature = "stm32g483",
+        feature = "stm32g484",
+    ))]
+    pub fn boot_from_bank2(&mut self) -> bool {
+        self.flash._optr.optr().read().bits() & Self::BFB2_MASK > 0
+    }
+
+    //Category 3 devices, these support dual bank flash
+    /// Set which flash bank to boot from
+    #[cfg(any(
+        feature = "stm32g471",
+        feature = "stm32g473",
+        feature = "stm32g474",
+        feature = "stm32g483",
+        feature = "stm32g484",
+    ))]
+    pub fn set_boot_from_bank2(&mut self, bfb2: bool) -> Result<()> {
+        self.unlock_options()?;
+        self.flash._optr.optr().modify(|r, w| unsafe {
+            w.bits(if bfb2 {
+                r.bits() | Self::BFB2_MASK
+            } else {
+                r.bits() & !Self::BFB2_MASK
+            })
+        });
+
+        self.flash.cr.cr().modify(|_, w| w.optstrt().set_bit());
+
+        // Wait for operation to finish
+        while self.flash.sr.sr().read().bsy().bit_is_set() {}
+
+        // Check for errors
+        let sr = self.flash.sr.sr().read();
+
+        self.lock_options()?;
+
+        if sr.optverr().bit_is_set() {
+            self.flash.sr.sr().modify(|_, w| w.optverr().set_bit());
+            Err(Error::VerifyError)
+        } else {
+            Ok(())
+        }
     }
 
     //Category 3 devices, these support dual bank flash
@@ -289,6 +350,76 @@ impl<'a> FlashWriter<'a> {
                 }
             }
 
+            Ok(())
+        }
+    }
+
+    /// Erase the selected flash banks
+    pub fn erase_bank(&mut self, bank1: bool, bank2: bool) -> Result<()> {
+        const MER2_MASK: u32 = 1 << 15;
+        let dual_bank = self.dual_bank();
+        if bank1 | (bank2 & dual_bank) {
+            // Unlock Flash
+            self.unlock()?;
+
+            // Set Bank Erase
+            self.flash.cr.cr().modify(|_, w| w.mer1().bit(bank1));
+
+            if dual_bank {
+                self.flash.cr.cr().modify(|r, w| unsafe {
+                    w.bits(if bank2 {
+                        r.bits() | MER2_MASK
+                    } else {
+                        r.bits() & !MER2_MASK
+                    })
+                })
+            }
+
+            // Start Operation
+            self.flash.cr.cr().modify(|_, w| w.strt().set_bit());
+
+            // Wait for operation to finish
+            while self.flash.sr.sr().read().bsy().bit_is_set() {}
+
+            // Check for errors
+            let sr = self.flash.sr.sr().read();
+
+            // Remove Page Erase Operation bit
+            self.flash
+                .cr
+                .cr()
+                .modify(|r, w| unsafe { w.bits(r.bits() & !(MER2_MASK)).mer1().clear_bit() });
+
+            // Re-lock flash
+            self.lock()?;
+
+            if sr.wrperr().bit_is_set() {
+                self.flash.sr.sr().modify(|_, w| w.wrperr().set_bit());
+                Err(Error::EraseError)
+            } else {
+                if self.verify {
+                    // By subtracting 1 from the sector size and masking with
+                    // start_offset, we make 'start' point to the beginning of the
+                    // page. We do this because the entire page should have been
+                    // erased, regardless of where in the page the given
+                    // 'start_offset' was.
+                    let start = if bank1 { 0 } else { FLASH_BANK2_OFFSET };
+                    for idx in (start
+                        ..start
+                            + if bank1 & bank2 & dual_bank { 2 } else { 1 } * FLASH_BANK2_OFFSET)
+                        .step_by(2)
+                    {
+                        let write_address = (FLASH_START + idx) as *const u16;
+                        let verify: u16 = unsafe { core::ptr::read_volatile(write_address) };
+                        if verify != 0xFFFF {
+                            return Err(Error::VerifyError);
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+        } else {
             Ok(())
         }
     }
