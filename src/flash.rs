@@ -27,6 +27,7 @@ pub enum Error {
     LengthTooLong,
     EraseError,
     ProgrammingError,
+    ProgrammingSequenceError,
     WriteError,
     VerifyError,
     UnlockError,
@@ -381,7 +382,7 @@ impl<'a> FlashWriter<'a> {
     }
 
     /// Erase the selected flash banks
-    pub fn erase_bank(&mut self, bank1: bool, bank2: bool) -> Result<()> {
+    pub fn erase_bank(&mut self, bank1: bool, bank2: bool, current_bank_is_2: bool) -> Result<()> {
         const MER2_MASK: u32 = 1 << 15;
         let dual_bank = self.dual_bank();
         if bank1 | (bank2 & dual_bank) {
@@ -429,7 +430,11 @@ impl<'a> FlashWriter<'a> {
                     // page. We do this because the entire page should have been
                     // erased, regardless of where in the page the given
                     // 'start_offset' was.
-                    let start = if bank1 { 0 } else { FLASH_BANK2_OFFSET };
+                    let start = if bank1 ^ current_bank_is_2 {
+                        0
+                    } else {
+                        FLASH_BANK2_OFFSET
+                    };
                     for idx in (start
                         ..start
                             + if bank1 & bank2 & dual_bank { 2 } else { 1 } * FLASH_BANK2_OFFSET)
@@ -546,15 +551,30 @@ impl<'a> FlashWriter<'a> {
 
             // Check for errors
             if self.flash.sr.sr().read().pgaerr().bit_is_set() {
-                self.flash.sr.sr().modify(|_, w| w.pgaerr().clear_bit());
+                self.flash.sr.sr().modify(|_, w| w.pgaerr().set_bit());
 
                 self.lock()?;
                 return Err(Error::ProgrammingError);
+            } else if self.flash.sr.sr().read().pgserr().bit_is_set() {
+                self.flash.sr.sr().modify(|_, w| w.pgserr().set_bit());
+
+                self.lock()?;
+                return Err(Error::ProgrammingSequenceError);
             } else if self.flash.sr.sr().read().wrperr().bit_is_set() {
-                self.flash.sr.sr().modify(|_, w| w.wrperr().clear_bit());
+                self.flash.sr.sr().modify(|_, w| w.wrperr().set_bit());
 
                 self.lock()?;
                 return Err(Error::WriteError);
+            } else if self.flash.sr.sr().read().sizerr().bit_is_set() {
+                self.flash.sr.sr().modify(|_, w| w.sizerr().set_bit());
+
+                self.lock()?;
+                return Err(Error::AddressLargerThanFlash);
+            } else if self.flash.sr.sr().read().pgaerr().bit_is_set() {
+                self.flash.sr.sr().modify(|_, w| w.pgaerr().set_bit());
+
+                self.lock()?;
+                return Err(Error::AddressMisaligned);
             } else if self.verify {
                 // Verify written WORD
                 // NOTE(unsafe) read with no side effects within FLASH area
