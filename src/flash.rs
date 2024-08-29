@@ -218,6 +218,32 @@ impl<'a> FlashWriter<'a> {
     }
 
     //Category 3 devices, these support dual bank flash
+    /// Load flash options
+    #[cfg(any(
+        feature = "stm32g471",
+        feature = "stm32g473",
+        feature = "stm32g474",
+        feature = "stm32g483",
+        feature = "stm32g484",
+    ))]
+    pub fn load_option(&mut self) -> Result<()> {
+        self.unlock_options()?;
+        self.flash.cr.cr().modify(|_, w| w.obl_launch().set_bit());
+
+        // Check for errors
+        let sr = self.flash.sr.sr().read();
+
+        self.lock_options()?;
+
+        if sr.optverr().bit_is_set() {
+            self.flash.sr.sr().modify(|_, w| w.optverr().set_bit());
+            Err(Error::VerifyError)
+        } else {
+            Ok(())
+        }
+    }
+
+    //Category 3 devices, these support dual bank flash
     /// Is the flash configured in dual bank mode
     #[cfg(any(
         feature = "stm32g471",
@@ -534,7 +560,7 @@ impl<'a> FlashWriter<'a> {
                 // NOTE(unsafe) read with no side effects within FLASH area
                 let verify1: u32 = unsafe { core::ptr::read_volatile(write_address1) };
                 let verify2: u32 = unsafe { core::ptr::read_volatile(write_address2) };
-                if verify1 != word1 && verify2 != word2 {
+                if verify1 != word1 || verify2 != word2 {
                     self.lock()?;
                     return Err(Error::VerifyError);
                 }
