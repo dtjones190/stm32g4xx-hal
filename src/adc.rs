@@ -1875,6 +1875,10 @@ macro_rules! adc {
                 /// Calibrate the adc for <Input Type>
                 #[inline(always)]
                 pub fn calibrate(&mut self, it: config::InputType) {
+                    //if the ADC is not disabled than the while loop below will just hang forever
+                    if self.is_enabled() {
+                        self.disable();
+                    }
                     match it {
                         config::InputType::SingleEnded => {
                             self.adc_reg.cr.modify(|_, w| w.adcaldif().clear_bit() );
