@@ -122,6 +122,7 @@ pub enum Error {
     Nack,
     PECError,
     BusError,
+    Hardware,
     ArbitrationLost,
 }
 
@@ -141,17 +142,24 @@ macro_rules! flush_txdr {
         }
 
         // If TXDR is not flagged as empty, write 1 to flush it
-        if $i2c.isr.read().txe().bit_is_set() {
+        if $i2c.isr.read().txe().bit_is_clear() {
             $i2c.isr.write(|w| w.txe().set_bit());
         }
     };
 }
 
+pub const MAX_TRIES: usize = 100_000;
+
 macro_rules! busy_wait {
     ($i2c:expr, $flag:ident, $variant:ident) => {
+        let mut i = 0;
         loop {
             let isr = $i2c.isr.read();
 
+            i += 1;
+            if i > MAX_TRIES {
+                return Err(Error::Hardware);
+            }
             if isr.$flag().$variant() {
                 break;
             } else if isr.berr().bit_is_set() {
