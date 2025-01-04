@@ -548,6 +548,7 @@ impl<'a> FlashWriter<'a> {
 
             // Set Page Programming to 0
             self.flash.cr.cr().modify(|_, w| w.pg().clear_bit());
+            while self.flash.sr.sr().read().bsy().bit_is_set() {}
 
             // Check for errors
             if self.flash.sr.sr().read().pgaerr().bit_is_set() {
