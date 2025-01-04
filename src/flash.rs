@@ -533,22 +533,22 @@ impl<'a> FlashWriter<'a> {
                     | (data[idx + 6] as u32) << 16
                     | (data[idx + 7] as u32) << 24;
             }
-
             // Set Page Programming to 1
             self.flash.cr.cr().modify(|_, w| w.pg().set_bit());
 
             while self.flash.sr.sr().read().bsy().bit_is_set() {}
 
-            // NOTE(unsafe) Write to FLASH area with no side effects
-            unsafe { core::ptr::write_volatile(write_address1, word1) };
-            unsafe { core::ptr::write_volatile(write_address2, word2) };
+            cortex_m::interrupt::free(|_| {
+                // NOTE(unsafe) Write to FLASH area with no side effects
+                unsafe { core::ptr::write_volatile(write_address1, word1) };
+                unsafe { core::ptr::write_volatile(write_address2, word2) };
 
-            // Wait for write
-            while self.flash.sr.sr().read().bsy().bit_is_set() {}
+                // Wait for write
+                while self.flash.sr.sr().read().bsy().bit_is_set() {}
 
-            // Set Page Programming to 0
-            self.flash.cr.cr().modify(|_, w| w.pg().clear_bit());
-            while self.flash.sr.sr().read().bsy().bit_is_set() {}
+                // Set Page Programming to 0
+                self.flash.cr.cr().modify(|_, w| w.pg().clear_bit());
+            });
 
             // Check for errors
             if self.flash.sr.sr().read().pgaerr().bit_is_set() {
